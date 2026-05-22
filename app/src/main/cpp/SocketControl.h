@@ -9,56 +9,42 @@
 #include <cstring>
 #include "Logger.h"
 
-extern bool  hackMap;
-extern bool  hackCamXa;
-extern float camXaValue;
-extern bool  hackSkin;
-extern bool  hackESP;
+extern bool hackMap;
 
 static bool main_thread_flag = true;
 
-inline void* socket_server_thread(void*) {
-    int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (server_fd < 0) return nullptr;
+inline void* socket_server_thread(void* arg) {
+    int server_fd, new_socket;
+    struct sockaddr_un address;
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    const char* name = "StarcoolPRO_socket";
-    addr.sun_path[0] = '\0';
-    strcpy(addr.sun_path + 1, name);
-    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
+    if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) return nullptr;
 
-    if (::bind(server_fd, (sockaddr*)&addr, len) < 0) { close(server_fd); return nullptr; }
-    if (listen(server_fd, 5) < 0)                     { close(server_fd); return nullptr; }
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    const char* socket_name = "StarcoolHOK_socket";
+    address.sun_path[0] = '\0';
+    strcpy(address.sun_path + 1, socket_name);
+    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(socket_name);
 
-    char buf[256] = {0};
+    if (::bind(server_fd, (struct sockaddr*)&address, len) < 0) { close(server_fd); return nullptr; }
+    if (listen(server_fd, 5) < 0) { close(server_fd); return nullptr; }
+
+    char buf[128] = {0};
     while (main_thread_flag) {
-        socklen_t al = sizeof(addr);
-        int sock = accept(server_fd, (sockaddr*)&addr, &al);
-        if (sock < 0) continue;
-        int n = read(sock, buf, 255);
+        socklen_t al = sizeof(address);
+        new_socket = accept(server_fd, (struct sockaddr*)&address, &al);
+        if (new_socket < 0) continue;
+        int n = read(new_socket, buf, 127);
         if (n > 0) {
             buf[n] = '\0';
             std::string msg(buf);
-            while (!msg.empty() && (msg.back()=='\n'||msg.back()=='\r'||msg.back()==' ')) msg.pop_back();
-
-            if      (msg=="MAP_HACK:1")    hackMap   = true;
-            else if (msg=="MAP_HACK:0")    hackMap   = false;
-            else if (msg=="SKIN_ENABLE:1") hackSkin  = true;
-            else if (msg=="SKIN_ENABLE:0") hackSkin  = false;
-            else if (msg=="ESP_ENABLE:1")  hackESP   = true;
-            else if (msg=="ESP_ENABLE:0")  hackESP   = false;
-            else if (msg.find("CAMXA_VAL:")==0) {
-                camXaValue = std::stof(msg.substr(10));
-                hackCamXa  = camXaValue > 0.0f;
-            }
+            while (!msg.empty() && (msg.back()=='\n'||msg.back()=='\r')) msg.pop_back();
+            if      (msg == "MAP_HACK:1") hackMap = true;
+            else if (msg == "MAP_HACK:0") hackMap = false;
         }
-        close(sock);
+        close(new_socket);
         memset(buf, 0, sizeof(buf));
     }
     close(server_fd);
     return nullptr;
 }
-
-#endif

@@ -7,7 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class SocketClient {
-    private static final String SOCKET_NAME = "StarcoolPRO_socket";
+    private static final String SOCKET_NAME = "StarcoolHOK_socket";
     private static final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private static void send(final String msg) {
@@ -21,8 +21,5 @@ public class SocketClient {
         });
     }
 
-    public static void setMapHack(boolean on)   { send("MAP_HACK:"    + (on?"1":"0")); }
-    public static void setSkinUnlock(boolean on) { send("SKIN_ENABLE:" + (on?"1":"0")); }
-    public static void setESP(boolean on)        { send("ESP_ENABLE:"  + (on?"1":"0")); }
-    public static void setCamXa(float v)         { send("CAMXA_VAL:"  + v); }
+    public static void setMapHack(boolean on) { send("MAP_HACK:" + (on ? "1" : "0")); }
 }

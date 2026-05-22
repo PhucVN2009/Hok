@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
     private fun launchGame() {
         try {
             val intent = Intent().apply {
-                setClassName("com.garena.game.kgvn", "com.garena.game.kgtw.SGameActivity")
+                setClassName("com.levelinfinite.sgameGlobal.midaspay", "com.levelinfinite.sgameGlobal.SGameGlobalActivity")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             startActivity(intent)
