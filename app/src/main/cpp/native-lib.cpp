@@ -1,3 +1,4 @@
+#define targetLibName OBFUSCATE("libil2cpp.so")
 #include <EGL/egl.h>
 #include <vector>
 #include <cstring>
@@ -12,7 +13,6 @@
 #include "KittyMemory/MemoryPatch.h"
 #include "STARCOOL.h"
 #include "SocketControl.h"
-#define targetLibName OBFUSCATE("libil2cpp.so")
 
 // ================================================================
 // FEATURE FLAGS
@@ -187,14 +187,9 @@ static jfloatArray GetEspActors(JNIEnv *env, jclass, jint screenW, jint screenH)
 // INIT THREAD
 // ================================================================
 static void *Init_Thread(void *) {
-    // Chờ libil2cpp.so load
-    ProcMap il2cppMap;
-    do {
-        il2cppMap = KittyMemory::getLibraryMap("libil2cpp.so");
-        sleep(1);
-    } while (!il2cppMap.isValid());
-
-    LOGI("[STAR] libil2cpp found at 0x%lx", (uintptr_t)il2cppMap.startAddr);
+    // Chờ libil2cpp.so load (dùng getAbsoluteAddress poll)
+    while (getAbsoluteAddress(targetLibName, 0x100) == 0) sleep(1);
+    sleep(2); // đợi lib init xong
 
     // Dùng HOOK macro chuẩn của source (Dobby/MSHook)
     HOOK("6BCE384", hook_SetVisible,   old_SetVisible);   // Map Hack
