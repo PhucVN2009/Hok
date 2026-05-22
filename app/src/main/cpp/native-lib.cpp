@@ -72,16 +72,16 @@ TdrErrorType hook_unpack(CSProtocol::COMDT_HERO_COMMON_INFO* self, void* buf, ui
     if (!hackSkin || !self) return result;
     if (g_skinHeroId == 0 || g_skinId == 0) return result;
 
-    if (COMDT_HERO_COMMON_INFO::getDwHeroID(self) == g_skinHeroId) {
+    if (CSProtocol::COMDT_HERO_COMMON_INFO::getDwHeroID(self) == g_skinHeroId) {
         // Lưu skin gốc để restore
         bool found = false;
         for (auto& e : g_skinSave) {
             if (e.instance == self) { found = true; break; }
         }
         if (!found) {
-            g_skinSave.push_back({self, COMDT_HERO_COMMON_INFO::getWSkinID(self)});
+            g_skinSave.push_back({self, CSProtocol::COMDT_HERO_COMMON_INFO::getWSkinID(self)});
         }
-        COMDT_HERO_COMMON_INFO::setWSkinID(self, g_skinId);
+        CSProtocol::COMDT_HERO_COMMON_INFO::setWSkinID(self, g_skinId);
     }
     return result;
 }
