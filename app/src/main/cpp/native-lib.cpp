@@ -1,227 +1,120 @@
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <vector>
+#include <cstring>
+#include <cstdio>
 #include "Includes/obfuscate.h"
 #include "Includes/Logger.h"
 #include "Includes/Macros.h"
 #include "Includes/JNIStuff.h"
 #include "Includes/Utils.h"
 #include "STARCOOLX/Call_Me.h"
-#include "STARCOOLX/IL2CppSDKGenerator/Il2Cpp.h"
-#include "STARCOOLX/IL2CppSDKGenerator/Unity.h"
 #include "STARCOOL.h"
 #include "SocketControl.h"
 
-// ========== TOGGLE FLAGS ==========
-bool  hackMap     = false;
-bool  hackCamXa   = false;
-float camXaValue  = 0.0f;
-bool  hackEsp     = false;
+// ================================================================
+// TOGGLE FLAGS
+// ================================================================
+bool hackMap    = false;   // Map Hack / SetVisible
+bool hackCamXa  = false;   // Camera zoom
+float camXaValue= 0.0f;
+bool hackSkin   = false;   // Mod Skin
+bool hackESP    = false;   // ESP overlay
 
-// ========== ESP SHARED STATE ==========
-ESPHero g_espHeroes[ESP_MAX_HEROES];
-int     g_espHeroCount = 0;
-int     g_selfCamp     = 0;
-float   g_screenW      = 1080.0f;
-float   g_screenH      = 2400.0f;
+// ================================================================
+// MOD SKIN — theo logic modskinqqq.h
+// Dump HOK 1.62.1.4:
+//   COMDT_HERO_COMMON_INFO.dwHeroID @ 0x8
+//   COMDT_HERO_COMMON_INFO.wSkinID  @ 0x3A
+//   unpack RVA                      : 0x3A10664
+//   CRoleInfo.IsCanUseSkin(u,u)     : 0x7E08630
+//   CRoleInfo.IsHaveHeroSkin(u,u,b) : 0x7E079AC
+//   CRoleInfo.GetWearSkinId()       : 0x7637D40
+//   CRoleInfo.RefreshHeroPanel(b,b,b): 0x77C5650
+// ================================================================
 
-// ========== OFFSETS (dump 64BIT 1.62.1.4) ==========
-// KyriosFramework (MonoSingleton)
-#define OFF_KYRIOS_ACTORMGR     0x28   // ActorManager*
+// Skin target (set qua socket)
+uint32_t g_skinHeroId = 0;
+uint16_t g_skinId     = 0;
 
-// ActorManager
-#define OFF_MGR_HEROACTORS      0x20   // List<PoolObjHandle<ActorLinker>>
+// saveData: lưu skin gốc để restore khi tắt
+struct SkinEntry {
+    void*    instance;
+    uint16_t origSkinId;
+};
+static std::vector<SkinEntry> g_skinSave;
 
-// IL2CPP List<T>
-#define OFF_LIST_ITEMS          0x10   // Array*
-#define OFF_LIST_SIZE           0x18   // int
+namespace CSProtocol {
 
-// IL2CPP Array data offset
-#define OFF_ARRAY_DATA          0x20
-
-// PoolObjHandle<ActorLinker>: stride=16, _handleObj @ +0x8
-#define POOL_STRIDE             16
-#define OFF_HANDLE_OBJ          0x8
-
-// ActorLinker
-#define OFF_ACTOR_LOC_X         0x164  // VInt3.x (int, /1000 = metres)
-#define OFF_ACTOR_LOC_Y         0x168  // VInt3.y
-#define OFF_ACTOR_LOC_Z         0x16C  // VInt3.z
-#define OFF_ACTOR_VALUE_COMP    0x28   // ValueLinkerComponent*
-#define OFF_ACTOR_CHARINFO      0x110  // CActorInfo*
-#define OFF_ACTOR_TYPE          0x200  // ActorTypeDef (int)
-#define OFF_ACTOR_CAMP          0x204  // COM_PLAYERCAMP (int)
-#define OFF_ACTOR_TRANSFORM     0x430  // Transform*
-#define OFF_ACTOR_HOSTCTRL      0x190  // bool m_bIsHostCtrlActor
-
-// ValueLinkerComponent
-#define OFF_VALUE_HP            0x40   // int actorHp
-#define OFF_VALUE_MAXHP         0x44   // int actorHpTotal
-
-// CActorInfo
-#define OFF_CHARINFO_NAME       0x10   // string* ActorName
-
-// Il2CppString
-#define OFF_STR_LEN             0x10   // int32 length
-#define OFF_STR_CHARS           0x14   // uint16[] chars (UTF-16)
-
-// CameraSystem
-#define OFF_CAMSYS_MAINCAM      0x108  // UnityEngine.Camera*
-
-// ActorTypeDef: Hero = 0
-#define ACTOR_TYPE_HERO         0
-
-// ========== CAMERA / W2S ==========
-struct Vec3 { float x, y, z; };
-
-typedef Vec3 (*fn_W2S_t)(void* camera, Vec3 pos, int eye);
-static fn_W2S_t fn_W2S = nullptr;
-
-static void* g_cameraSystem = nullptr; // captured from GetCameraHeightRateValue hook
-
-static Vec3 DoW2S(void* cam, Vec3 worldPos) {
-    if (fn_W2S && cam)
-        return fn_W2S(cam, worldPos, 0);
-    // Fallback: approximate top-down MOBA projection
-    Vec3 s;
-    s.x = worldPos.x * (g_screenW / 140.0f) + g_screenW * 0.5f;
-    s.y = g_screenH - (worldPos.z * (g_screenH / 140.0f) + g_screenH * 0.5f);
-    s.z = 1.0f;
-    return s;
-}
-
-// ========== HELPERS ==========
-template<typename T>
-static inline T Rd(uintptr_t addr) {
-    if (addr < 0x1000) return T{};
-    return *reinterpret_cast<T*>(addr);
-}
-
-static void ReadName(void* strPtr, char* out, int maxLen) {
-    out[0] = '\0';
-    if (!strPtr) return;
-    uintptr_t b = (uintptr_t)strPtr;
-    int len = Rd<int32_t>(b + OFF_STR_LEN);
-    if (len <= 0 || len > 64) return;
-    const uint16_t* chars = reinterpret_cast<const uint16_t*>(b + OFF_STR_CHARS);
-    int pos = 0;
-    for (int i = 0; i < len && pos < maxLen - 1; i++) {
-        uint16_t c = chars[i];
-        if (c < 0x80) {
-            out[pos++] = (char)c;
-        } else if (c < 0x800) {
-            if (pos + 1 >= maxLen - 1) break;
-            out[pos++] = (char)(0xC0 | (c >> 6));
-            out[pos++] = (char)(0x80 | (c & 0x3F));
-        } else {
-            if (pos + 2 >= maxLen - 1) break;
-            out[pos++] = (char)(0xE0 | (c >> 12));
-            out[pos++] = (char)(0x80 | ((c >> 6) & 0x3F));
-            out[pos++] = (char)(0x80 | (c & 0x3F));
-        }
+class COMDT_HERO_COMMON_INFO {
+public:
+    uint32_t getDwHeroID() {
+        if (!this) return 0;
+        return *(uint32_t*)((uintptr_t)this + 0x8);
     }
-    out[pos] = '\0';
-}
-
-// ========== UPDATE ESP DATA ==========
-static void UpdateESPData() {
-    // 1. KyriosFramework instance
-    void* kyriosInst = nullptr;
-    IL2Cpp::Il2CppGetStaticFieldValue(
-        "Assembly-CSharp.dll", "Kyrios", "KyriosFramework", "_instance", &kyriosInst);
-    if (!kyriosInst) return;
-
-    // 2. ActorManager
-    void* actorMgr = Rd<void*>((uintptr_t)kyriosInst + OFF_KYRIOS_ACTORMGR);
-    if (!actorMgr) return;
-
-    // 3. HeroActors list
-    void* heroList = Rd<void*>((uintptr_t)actorMgr + OFF_MGR_HEROACTORS);
-    if (!heroList) return;
-
-    int heroCount = Rd<int>((uintptr_t)heroList + OFF_LIST_SIZE);
-    if (heroCount <= 0 || heroCount > ESP_MAX_HEROES * 2) return;
-
-    void* itemsArr = Rd<void*>((uintptr_t)heroList + OFF_LIST_ITEMS);
-    if (!itemsArr) return;
-
-    // 4. Camera
-    void* mainCam = nullptr;
-    if (g_cameraSystem)
-        mainCam = Rd<void*>((uintptr_t)g_cameraSystem + OFF_CAMSYS_MAINCAM);
-
-    // 5. Iterate heroes
-    pthread_mutex_lock(&g_espMutex);
-
-    int count = 0;
-    int selfCampTmp = 0;
-    uintptr_t data = (uintptr_t)itemsArr + OFF_ARRAY_DATA;
-
-    for (int i = 0; i < heroCount && count < ESP_MAX_HEROES; i++) {
-        uintptr_t handleBase = data + (uintptr_t)i * POOL_STRIDE;
-        void* actorPtr = Rd<void*>(handleBase + OFF_HANDLE_OBJ);
-        if (!actorPtr) continue;
-
-        uintptr_t a = (uintptr_t)actorPtr;
-
-        // Hero only
-        if (Rd<int>(a + OFF_ACTOR_TYPE) != ACTOR_TYPE_HERO) continue;
-
-        int camp = Rd<int>(a + OFF_ACTOR_CAMP);
-        if (camp <= 0 || camp > 2) continue;
-
-        // Detect local player
-        if (Rd<bool>(a + OFF_ACTOR_HOSTCTRL) && selfCampTmp == 0)
-            selfCampTmp = camp;
-
-        // HP
-        void* vc = Rd<void*>(a + OFF_ACTOR_VALUE_COMP);
-        int hp    = vc ? Rd<int>((uintptr_t)vc + OFF_VALUE_HP)    : 0;
-        int maxHp = vc ? Rd<int>((uintptr_t)vc + OFF_VALUE_MAXHP) : 1;
-        if (hp <= 0 || maxHp <= 0) continue;
-
-        // World position
-        Vec3 wp;
-        wp.x = Rd<int>(a + OFF_ACTOR_LOC_X) / 1000.0f;
-        wp.y = Rd<int>(a + OFF_ACTOR_LOC_Y) / 1000.0f;
-        wp.z = Rd<int>(a + OFF_ACTOR_LOC_Z) / 1000.0f;
-
-        // W2S
-        Vec3 sp = DoW2S(mainCam, wp);
-        if (sp.z < 0) continue;
-
-        // Name
-        char name[64] = "Hero";
-        void* ci = Rd<void*>(a + OFF_ACTOR_CHARINFO);
-        if (ci) {
-            void* ns = Rd<void*>((uintptr_t)ci + OFF_CHARINFO_NAME);
-            ReadName(ns, name, 64);
-        }
-
-        ESPHero& h = g_espHeroes[count++];
-        h.screenX = sp.x;
-        h.screenY = sp.y; // already flipped in DoW2S
-        h.worldX  = wp.x;
-        h.worldZ  = wp.z;
-        h.hp      = hp;
-        h.maxHp   = maxHp;
-        h.camp    = camp;
-        h.isEnemy = false; // set after loop
-        h.valid   = true;
-        strncpy(h.name, name, 63);
-        h.name[63] = '\0';
+    uint16_t getWSkinID() {
+        if (!this) return 0;
+        return *(uint16_t*)((uintptr_t)this + 0x3A);
     }
+    void setWSkinID(uint16_t v) {
+        if (!this) return;
+        *(uint16_t*)((uintptr_t)this + 0x3A) = v;
+    }
+};
 
-    if (selfCampTmp) g_selfCamp = selfCampTmp;
-    for (int i = 0; i < count; i++)
-        g_espHeroes[i].isEnemy = (g_selfCamp != 0)
-            ? (g_espHeroes[i].camp != g_selfCamp)
-            : (g_espHeroes[i].camp == 2);
+} // namespace CSProtocol
 
-    g_espHeroCount = count;
-    pthread_mutex_unlock(&g_espMutex);
+// Hook: COMDT_HERO_COMMON_INFO.unpack — intercept skin khi load trận
+typedef int32_t TdrErrorType;
+TdrErrorType (*_unpack)(CSProtocol::COMDT_HERO_COMMON_INFO* self, void* buf, uint32_t cutVer);
+TdrErrorType hook_unpack(CSProtocol::COMDT_HERO_COMMON_INFO* self, void* buf, uint32_t cutVer) {
+    TdrErrorType result = _unpack(self, buf, cutVer);
+    if (!hackSkin || !self) return result;
+    if (g_skinHeroId == 0 || g_skinId == 0) return result;
+
+    if (self->getDwHeroID() == g_skinHeroId) {
+        // Lưu skin gốc để restore
+        bool found = false;
+        for (auto& e : g_skinSave) {
+            if (e.instance == self) { found = true; break; }
+        }
+        if (!found) {
+            g_skinSave.push_back({self, self->getWSkinID()});
+        }
+        self->setWSkinID(g_skinId);
+    }
+    return result;
 }
 
-// ========== MAP HACK (SetVisible) ==========
+// Hook: CRoleInfo.IsCanUseSkin(uint heroId, uint skinId)
+bool (*_IsCanUseSkin)(void* self, uint32_t heroId, uint32_t skinId);
+bool hook_IsCanUseSkin(void* self, uint32_t heroId, uint32_t skinId) {
+    if (hackSkin && heroId != 0) {
+        // Cập nhật hero target khi user chọn skin
+        if (g_skinHeroId == 0) g_skinHeroId = heroId;
+        return true;
+    }
+    return _IsCanUseSkin(self, heroId, skinId);
+}
+
+// Hook: CRoleInfo.IsHaveHeroSkin(uint heroId, uint skinId, bool isIncludeTimeLimited)
+bool (*_IsHaveHeroSkin)(void* self, uint32_t heroId, uint32_t skinId, bool incTime);
+bool hook_IsHaveHeroSkin(void* self, uint32_t heroId, uint32_t skinId, bool incTime) {
+    if (hackSkin) return true;
+    return _IsHaveHeroSkin(self, heroId, skinId, incTime);
+}
+
+// Hook: CRoleInfo.GetWearSkinId() — trả về skin ID khi game cần biết hero mặc skin nào
+uint32_t (*_GetWearSkinId)(void* self);
+uint32_t hook_GetWearSkinId(void* self) {
+    if (hackSkin && g_skinId != 0) return (uint32_t)g_skinId;
+    return _GetWearSkinId(self);
+}
+
+// ================================================================
+// MAP HACK — SetVisible(instance, camp, bVisible, forceSync)
+// RVA: 0x6BCE384
+// ================================================================
 enum COM_PLAYERCAMP {
     ComPlayercampMid = 0,
     ComPlayercamp1   = 1,
@@ -229,72 +122,141 @@ enum COM_PLAYERCAMP {
 };
 
 void (*_SetVisible)(void* instance, COM_PLAYERCAMP camp, bool bVisible, bool forceSync);
-void SetVisible(void* instance, COM_PLAYERCAMP camp, bool bVisible, bool forceSync) {
-    if (instance != NULL && hackMap) {
-        if (camp == ComPlayercamp1 || camp == ComPlayercamp2)
+void hook_SetVisible(void* instance, COM_PLAYERCAMP camp, bool bVisible, bool forceSync) {
+    if (instance && hackMap) {
+        if (camp == ComPlayercamp1 || camp == ComPlayercamp2) {
             bVisible = true;
+        }
     }
     _SetVisible(instance, camp, bVisible, forceSync);
 }
 
-// ========== CAM XA HOOK ==========
+// ================================================================
+// CAM XA — GetCameraHeightRateValue
 // RVA: 0x8D546F4
-float (*old_GetCameraHeightRateValue)(void* instance, int type);
-float GetCameraHeightRateValue(void* instance, int type) {
-    float original = old_GetCameraHeightRateValue(instance, type);
-    // Cache CameraSystem instance cho ESP W2S
-    if (instance && !g_cameraSystem)
-        g_cameraSystem = instance;
-    if (instance && hackCamXa)
-        return original + camXaValue;
-    return original;
+// ================================================================
+float (*_GetCameraHeightRateValue)(void* instance, int type);
+float hook_GetCameraHeightRateValue(void* instance, int type) {
+    float orig = _GetCameraHeightRateValue(instance, type);
+    if (instance && hackCamXa) return orig + camXaValue;
+    return orig;
 }
 
-// ========== THREAD CHÍNH ==========
+// ================================================================
+// ESP — actor positions gửi về Android qua socket
+// ActorLinker.get_objCamp() RVA: 0x8A49630
+// ActorLinker.get_position() RVA: 0x8A490AC
+// WorldToScreenPoint(Camera,Vector3)→Vector2 RVA: 0x71C99BC
+// Camera.get_main() RVA: 0x94AE0DC
+// ================================================================
+
+struct Vector2 { float x, y; };
+struct Vector3 { float x, y, z; };
+
+COM_PLAYERCAMP (*fp_GetObjCamp)(void* actorLinker);
+Vector3        (*fp_GetPosition)(void* actorLinker);
+Vector2        (*fp_WorldToScreen)(void* camera, Vector3 worldPoint);
+void*          (*fp_GetMainCamera)();
+
+// Actor data gửi qua socket
+struct ActorESPData {
+    int   camp;   // 1 or 2
+    float sx, sy; // screen position (0-1 normalized)
+};
+static ActorESPData g_espActors[20];
+static int g_espCount = 0;
+
+// Hook: ActorLinker.get_position — capture position khi actor update
+// Dùng hook trên get_position để collect data mỗi frame
+void (*_orig_GetPos)(void* self);
+void hook_GetPos_collect(void* actorLinker) {
+    // Không hook get_position vì return type phức tạp
+    // Collect trong Update thread thay thế
+}
+
+// Hàm collect ESP data (gọi từ loop)
+static void CollectESPData() {
+    if (!hackESP || !fp_GetMainCamera || !fp_WorldToScreen) return;
+
+    void* camera = fp_GetMainCamera();
+    if (!camera) return;
+
+    // Reset
+    g_espCount = 0;
+
+    // TODO: iterate actors qua ActorManager
+    // Tạm dùng bằng cách hook ActorLinker update
+    // (sẽ được populate bởi hook HOK_OnLateUpdate)
+}
+
+// ================================================================
+// INIT THREAD
+// ================================================================
 void* Init_Thread(void*) {
-    uintptr_t il2cppMap = 0;
+    uintptr_t base = 0;
     for (int i = 0; i < 15; i++) {
-        il2cppMap = Tools::GetBaseAddress("libil2cpp.so");
-        if (il2cppMap != 0) break;
+        base = Tools::GetBaseAddress("libil2cpp.so");
+        if (base) break;
         sleep(2);
     }
-    if (il2cppMap == 0) return nullptr;
+    if (!base) return nullptr;
 
-    // Hook Map Hack (SetVisible)
-    DobbyHook((void*)(il2cppMap + 0x6BCE384),
-              (void*)SetVisible, (void**)&_SetVisible);
+    LOGI("[STAR] base=0x%lx", base);
 
-    // Hook Cam Xa (GetCameraHeightRateValue)
-    DobbyHook((void*)(il2cppMap + 0x8D546F4),
-              (void*)GetCameraHeightRateValue,
-              (void**)&old_GetCameraHeightRateValue);
+    // === Map Hack ===
+    DobbyHook((void*)(base + 0x6BCE384), (void*)hook_SetVisible,
+              (void**)&_SetVisible);
 
-    // Resolve Camera.WorldToScreenPoint
-    IL2Cpp::Il2CppAttach();
-    fn_W2S = (fn_W2S_t)IL2Cpp::Il2CppGetMethodOffset(
-        "UnityEngine.CoreModule.dll", "UnityEngine", "Camera",
-        "WorldToScreenPoint", 1);
-    LOGD("[ESP] fn_W2S=%p", (void*)fn_W2S);
+    // === Cam Xa ===
+    DobbyHook((void*)(base + 0x8D546F4), (void*)hook_GetCameraHeightRateValue,
+              (void**)&_GetCameraHeightRateValue);
 
-    // Main loop — giống gốc nhưng thêm ESP update
+    // === Mod Skin ===
+    // COMDT_HERO_COMMON_INFO.unpack
+    DobbyHook((void*)(base + 0x3A10664), (void*)hook_unpack,
+              (void**)&_unpack);
+    // CRoleInfo.IsCanUseSkin(uint, uint)
+    DobbyHook((void*)(base + 0x7E08630), (void*)hook_IsCanUseSkin,
+              (void**)&_IsCanUseSkin);
+    // CRoleInfo.IsHaveHeroSkin(uint, uint, bool)
+    DobbyHook((void*)(base + 0x7E079AC), (void*)hook_IsHaveHeroSkin,
+              (void**)&_IsHaveHeroSkin);
+    // CRoleInfo.GetWearSkinId()
+    DobbyHook((void*)(base + 0x7637D40), (void*)hook_GetWearSkinId,
+              (void**)&_GetWearSkinId);
+
+    // === ESP function pointers (không hook, gọi trực tiếp) ===
+    fp_GetObjCamp    = (COM_PLAYERCAMP(*)(void*))          (base + 0x8A49630);
+    fp_GetPosition   = (Vector3(*)(void*))                 (base + 0x8A490AC);
+    fp_WorldToScreen = (Vector2(*)(void*, Vector3))        (base + 0x71C99BC);
+    fp_GetMainCamera = (void*(*)())                        (base + 0x94AE0DC);
+
+    LOGI("[STAR] all hooks done");
+
     while (true) {
-        if (hackEsp)
-            UpdateESPData();
-        usleep(50000); // 50ms
+        sleep(1);
+        if (hackSkin && !hackSkin) {
+            // Restore skins khi tắt
+            for (auto& e : g_skinSave) {
+                if (e.instance)
+                    ((CSProtocol::COMDT_HERO_COMMON_INFO*)e.instance)->setWSkinID(e.origSkinId);
+            }
+            g_skinSave.clear();
+        }
     }
     return nullptr;
 }
 
-// ========== LIBRARY ENTRY ==========
+// ================================================================
+// LIBRARY ENTRY
+// ================================================================
 __attribute__((constructor))
 void lib_main() {
-    pthread_t ptid;
-    pthread_create(&ptid, NULL, socket_server_thread, NULL);
-    pthread_t myThread;
-    pthread_create(&myThread, NULL, Init_Thread, NULL);
+    pthread_t t1, t2;
+    pthread_create(&t1, nullptr, socket_server_thread, nullptr);
+    pthread_create(&t2, nullptr, Init_Thread, nullptr);
 }
 
-// ========== JNI ==========
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     return JNI_VERSION_1_6;
 }
