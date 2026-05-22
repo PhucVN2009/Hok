@@ -9,8 +9,10 @@
 #include "Includes/Logger.h"
 #include "Includes/Utils.h"
 #include "STARCOOLX/Call_Me.h"
+#include "KittyMemory/MemoryPatch.h"
 #include "STARCOOL.h"
 #include "SocketControl.h"
+#define targetLibName OBFUSCATE("libil2cpp.so")
 
 // ================================================================
 // FEATURE FLAGS
@@ -185,39 +187,35 @@ static jfloatArray GetEspActors(JNIEnv *env, jclass, jint screenW, jint screenH)
 // INIT THREAD
 // ================================================================
 static void *Init_Thread(void *) {
-    uintptr_t base = 0;
-    for (int i = 0; i < 15; i++) {
-        base = Tools::GetBaseAddress("libil2cpp.so");
-        if (base) break;
-        sleep(2);
-    }
-    if (!base) return nullptr;
+    // Chờ libil2cpp.so load
+    ProcMap il2cppMap;
+    do {
+        il2cppMap = KittyMemory::getLibraryMap("libil2cpp.so");
+        sleep(1);
+    } while (!il2cppMap.isValid());
 
-    LOGI("[STAR] base=0x%lx", base);
+    LOGI("[STAR] libil2cpp found at 0x%lx", (uintptr_t)il2cppMap.startAddr);
 
-    // Map Hack
-    DobbyHook((void*)(base+0x6BCE384), (void*)hook_SetVisible,   (void**)&old_SetVisible);
-    // Cam Xa
-    DobbyHook((void*)(base+0x8D546F4), (void*)hook_GetCamHeight, (void**)&old_GetCamHeight);
-    // Skin unlock (lobby only)
-    DobbyHook((void*)(base+0x7E08630), (void*)hook_IsCanUseSkin,   (void**)&old_IsCanUseSkin);
-    DobbyHook((void*)(base+0x7E079AC), (void*)hook_IsHaveHeroSkin, (void**)&old_IsHaveHeroSkin);
-    // ESP actor tracking
-    DobbyHook((void*)(base+0x8A47648), (void*)hook_LActorRoot_UpdateLogic, (void**)&old_LActorRoot_UpdateLogic);
+    // Dùng HOOK macro chuẩn của source (Dobby/MSHook)
+    HOOK("6BCE384", hook_SetVisible,   old_SetVisible);   // Map Hack
+    HOOK("8D546F4", hook_GetCamHeight, old_GetCamHeight); // Cam Xa
+    HOOK("7E08630", hook_IsCanUseSkin,   old_IsCanUseSkin);   // Skin unlock
+    HOOK("7E079AC", hook_IsHaveHeroSkin, old_IsHaveHeroSkin); // Skin unlock
+    HOOK("8A47648", hook_LActorRoot_UpdateLogic, old_LActorRoot_UpdateLogic); // ESP
 
-    // ESP function pointers (direct call, not hooked)
-    fp_get_objCamp    = (int(*)(void*))    (base + 0x8A49630);
-    fp_get_location   = (VInt3(*)(void*))  (base + 0x8A48CE0);
-    fp_get_forward    = (VInt3(*)(void*))  (base + 0x8A48B58);
-    fp_get_bActive    = (bool(*)(void*))   (base + 0x6BAADA8);
-    fp_WorldToScreen  = (Vector2(*)(void*, Vector3))(base + 0x71C99BC);
-    fp_Camera_main    = (void*(*)())       (base + 0x94AE0DC);
-    fp_get_actorHp    = (int(*)(void*))    (base + 0x8A7B378);
-    fp_get_actorHpTotal=(int(*)(void*))    (base + 0x8A7B388);
-    fp_IsHostPlayer   = (bool(*)(void*))   (base + 0x8A52478);
-    fp_get_bVisible   = (bool(*)(void*))   (base + 0x8A49504);
+    // Function pointers (không hook, gọi trực tiếp)
+    fp_get_objCamp     = (int(*)(void*))           getAbsoluteAddress(targetLibName, 0x8A49630);
+    fp_get_location    = (VInt3(*)(void*))          getAbsoluteAddress(targetLibName, 0x8A48CE0);
+    fp_get_forward     = (VInt3(*)(void*))          getAbsoluteAddress(targetLibName, 0x8A48B58);
+    fp_get_bActive     = (bool(*)(void*))           getAbsoluteAddress(targetLibName, 0x6BAADA8);
+    fp_WorldToScreen   = (Vector2(*)(void*, Vector3))getAbsoluteAddress(targetLibName, 0x71C99BC);
+    fp_Camera_main     = (void*(*)())               getAbsoluteAddress(targetLibName, 0x94AE0DC);
+    fp_get_actorHp     = (int(*)(void*))            getAbsoluteAddress(targetLibName, 0x8A7B378);
+    fp_get_actorHpTotal= (int(*)(void*))            getAbsoluteAddress(targetLibName, 0x8A7B388);
+    fp_IsHostPlayer    = (bool(*)(void*))           getAbsoluteAddress(targetLibName, 0x8A52478);
+    fp_get_bVisible    = (bool(*)(void*))           getAbsoluteAddress(targetLibName, 0x8A49504);
 
-    LOGI("[STAR] all hooks done");
+    LOGI("[STAR] all hooks installed");
     return nullptr;
 }
 
