@@ -81,6 +81,7 @@ class FloatingService : Service() {
         }
     }
 
+    private var scrollMenu: ScrollView? = null
     private var espEnabled = false
 
     // ── Window params helper ─────────────────────────────────────
@@ -158,7 +159,7 @@ class FloatingService : Service() {
             layoutParams = FrameLayout.LayoutParams(120, 120)
             setOnClickListener {
                 visibility = View.GONE
-                menuView?.visibility = View.VISIBLE
+                scrollMenu?.visibility = View.VISIBLE
                 wm.updateViewLayout(container, menuParams)
             }
             makeDraggable(this, menuParams)
@@ -168,6 +169,7 @@ class FloatingService : Service() {
         // ── Scrollable menu ───────────────────────────────────────
         val scrollView = ScrollView(this).apply {
             visibility = View.GONE
+            // saved for click handlers
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.WRAP_CONTENT
@@ -246,8 +248,8 @@ class FloatingService : Service() {
                 text = "⬅ Thu gọn"; setTextColor(Color.BLACK); setBackgroundColor(Color.LTGRAY)
                 setPadding(20,16,20,16)
                 setOnClickListener {
-                    scrollView.visibility = View.GONE
-                    btnIcon.visibility    = View.VISIBLE
+                    scrollMenu?.visibility = View.GONE
+                    btnIcon.visibility     = View.VISIBLE
                     wm.updateViewLayout(container, menuParams)
                 }
             })
@@ -257,6 +259,7 @@ class FloatingService : Service() {
             })
         }
         menuView = menu
+        scrollMenu = scrollView  // save reference
         scrollView.addView(menu)
 
         container.addView(btnIcon)

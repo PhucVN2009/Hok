@@ -70,7 +70,7 @@ static bool     (*fp_get_bVisible)(void*) = nullptr; // ActorLinker.get_bVisible
 static void (*old_LActorRoot_UpdateLogic)(void*, int);
 static void hook_LActorRoot_UpdateLogic(void *instance, int delta) {
     old_LActorRoot_UpdateLogic(instance, delta);
-    if (!instance || !hackESP) return;
+    if (!instance || !hackESP || !fp_get_objCamp) return;
 
     // Camp filter: 1=ally, 2=enemy (heroes); 0=neutral/NPC
     int camp = fp_get_objCamp ? fp_get_objCamp(instance) : 0;
@@ -236,16 +236,14 @@ void lib_main() {
     pthread_create(&t2, nullptr, Init_Thread, nullptr);
 }
 
+// GetEspActors dùng static JNI naming - không cần FindClass
+// Kotlin: external fun GetEspActors(screenW: Int, screenH: Int): FloatArray
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_star_android_service_FloatingService_GetEspActors(
+        JNIEnv *env, jobject, jint screenW, jint screenH) {
+    return GetEspActors(env, nullptr, screenW, screenH);
+}
+
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-    JNIEnv *env;
-    vm->GetEnv((void**)&env, JNI_VERSION_1_6);
-
-    // Register GetEspActors for Android drawing
-    JNINativeMethod methods[] = {
-        {(char*)"GetEspActors", (char*)"(II)[F", (void*)GetEspActors}
-    };
-    jclass clazz = env->FindClass("com/star/android/service/FloatingService");
-    if (clazz) env->RegisterNatives(clazz, methods, 1);
-
     return JNI_VERSION_1_6;
 }
