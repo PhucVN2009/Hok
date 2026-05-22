@@ -1,4 +1,5 @@
 #define targetLibName OBFUSCATE("libil2cpp.so")
+#include "Includes/Macros.h"
 #include <EGL/egl.h>
 #include <vector>
 #include <cstring>
