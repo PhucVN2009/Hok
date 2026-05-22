@@ -210,7 +210,7 @@ static void *Init_Thread(void *) {
     fp_get_location   = (VInt3(*)(void*))  (base + 0x8A48CE0);
     fp_get_forward    = (VInt3(*)(void*))  (base + 0x8A48B58);
     fp_get_bActive    = (bool(*)(void*))   (base + 0x6BAADA8);
-    fp_WorldToScreen  = (Vector3(*)(void*, Vector3))(base + 0x71C99BC);
+    fp_WorldToScreen  = (Vector2(*)(void*, Vector3))(base + 0x71C99BC);
     fp_Camera_main    = (void*(*)())       (base + 0x94AE0DC);
     fp_get_actorHp    = (int(*)(void*))    (base + 0x8A7B378);
     fp_get_actorHpTotal=(int(*)(void*))    (base + 0x8A7B388);
