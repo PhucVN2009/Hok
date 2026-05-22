@@ -48,17 +48,17 @@ namespace CSProtocol {
 
 class COMDT_HERO_COMMON_INFO {
 public:
-    uint32_t getDwHeroID() {
-        if (!this) return 0;
-        return *(uint32_t*)((uintptr_t)this + 0x8);
+    static uint32_t getDwHeroID(void* p) {
+        if (!p) return 0;
+        return *(uint32_t*)((uintptr_t)p + 0x8);
     }
-    uint16_t getWSkinID() {
-        if (!this) return 0;
-        return *(uint16_t*)((uintptr_t)this + 0x3A);
+    static uint16_t getWSkinID(void* p) {
+        if (!p) return 0;
+        return *(uint16_t*)((uintptr_t)p + 0x3A);
     }
-    void setWSkinID(uint16_t v) {
-        if (!this) return;
-        *(uint16_t*)((uintptr_t)this + 0x3A) = v;
+    static void setWSkinID(void* p, uint16_t v) {
+        if (!p) return;
+        *(uint16_t*)((uintptr_t)p + 0x3A) = v;
     }
 };
 
@@ -72,16 +72,16 @@ TdrErrorType hook_unpack(CSProtocol::COMDT_HERO_COMMON_INFO* self, void* buf, ui
     if (!hackSkin || !self) return result;
     if (g_skinHeroId == 0 || g_skinId == 0) return result;
 
-    if (self->getDwHeroID() == g_skinHeroId) {
+    if (COMDT_HERO_COMMON_INFO::getDwHeroID(self) == g_skinHeroId) {
         // Lưu skin gốc để restore
         bool found = false;
         for (auto& e : g_skinSave) {
             if (e.instance == self) { found = true; break; }
         }
         if (!found) {
-            g_skinSave.push_back({self, self->getWSkinID()});
+            g_skinSave.push_back({self, COMDT_HERO_COMMON_INFO::getWSkinID(self)});
         }
-        self->setWSkinID(g_skinId);
+        COMDT_HERO_COMMON_INFO::setWSkinID(self, g_skinId);
     }
     return result;
 }
@@ -150,8 +150,7 @@ float hook_GetCameraHeightRateValue(void* instance, int type) {
 // Camera.get_main() RVA: 0x94AE0DC
 // ================================================================
 
-struct Vector2 { float x, y; };
-struct Vector3 { float x, y, z; };
+// Vector2, Vector3 đã defined trong STARCOOLX/IL2CppSDKGenerator/
 
 COM_PLAYERCAMP (*fp_GetObjCamp)(void* actorLinker);
 Vector3        (*fp_GetPosition)(void* actorLinker);
@@ -239,7 +238,7 @@ void* Init_Thread(void*) {
             // Restore skins khi tắt
             for (auto& e : g_skinSave) {
                 if (e.instance)
-                    ((CSProtocol::COMDT_HERO_COMMON_INFO*)e.instance)->setWSkinID(e.origSkinId);
+                    CSProtocol::COMDT_HERO_COMMON_INFO::setWSkinID(e.instance, e.origSkinId);
             }
             g_skinSave.clear();
         }
