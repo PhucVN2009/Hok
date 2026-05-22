@@ -54,7 +54,7 @@ static int      (*fp_get_objCamp)(void*)  = nullptr; // ActorLinker/LActorRoot
 static VInt3    (*fp_get_location)(void*) = nullptr; // LActorRoot.get_location
 static VInt3    (*fp_get_forward)(void*)  = nullptr; // LActorRoot.get_forward
 static bool     (*fp_get_bActive)(void*)  = nullptr; // LActorRoot.get_bActive
-static Vector3  (*fp_WorldToScreen)(void*, Vector3) = nullptr; // static W2S
+static Vector2  (*fp_WorldToScreen)(void*, Vector3) = nullptr; // static W2S → Vector2
 static void*    (*fp_Camera_main)()       = nullptr; // Camera.get_main
 static int      (*fp_get_actorHp)(void*)     = nullptr;
 static int      (*fp_get_actorHpTotal)(void*)= nullptr;
@@ -146,12 +146,12 @@ static jfloatArray GetEspActors(JNIEnv *env, jclass, jint screenW, jint screenH)
             VInt3 loc = fp_get_location(actor);
             VInt3 fwd = fp_get_forward(actor);
             Vector3 worldPos = VInt2Vector(loc, fwd);
-            Vector3 screenPos = fp_WorldToScreen(cam, worldPos);
+            // WorldToScreenPoint(Camera,Vector3)→Vector2 (lowercase x,y fields)
+            Vector2 screenPos = fp_WorldToScreen(cam, worldPos);
 
-            if (screenPos.Z <= 0) continue; // behind camera
-
-            float sx = screenPos.X;
-            float sy = (float)screenH - screenPos.Y;
+            float sx = screenPos.x;
+            float sy = (float)screenH - screenPos.y;
+            // No z-check for static W2S (returns Vector2); bounds check filters off-screen
             if (sx < -200 || sx > screenW + 200 || sy < -200 || sy > screenH + 200) continue;
 
             // HP from ValueComponent (field offset 0x308 in LActorRoot)
