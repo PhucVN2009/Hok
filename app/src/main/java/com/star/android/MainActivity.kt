@@ -1,11 +1,21 @@
 package com.star.android
 
+import android.Manifest
+import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.Toast
+import android.text.Html
+import android.text.method.LinkMovementMethod
+import android.view.Gravity
+import android.view.Window
+import android.view.WindowManager
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -17,17 +27,49 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.star.android.service.FloatingService
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.star.android.ui.theme.StarAndroidInjectTheme
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        init { System.loadLibrary("Starcool") }
+
+        private const val REQUEST_CODE_WIFI_PERMISSION = 1001
+        private const val REQUEST_CODE_STORAGE_PERMISSION = 1002
+        private const val REQUEST_CODE_LOCATION_PERMISSION = 1003
+        private const val REQUEST_CODE_OVERLAY_PERMISSION = 1234
+    }
+
+    // Native method được gọi để hiện dialog từ native code
+    external fun showNativeAlertDialog()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Hiển thị dialog từ native code
+        showNativeAlertDialog()
+
+        // Kiểm tra permissions
+        checkPermissions()
+
+        // Kiểm tra quyền overlay
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            startActivityForResult(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                ),
+                REQUEST_CODE_OVERLAY_PERMISSION
+            )
+        }
+
         setContent {
             StarAndroidInjectTheme {
                 Surface(
@@ -37,8 +79,7 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         onStartMenu = {
                             if (checkOverlayPermission()) {
-                                startFloatingService()
-                                launchGame()
+                                Initialize(this@MainActivity)
                             }
                         }
                     )
@@ -47,50 +88,137 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Được gọi từ C++ để hiển thị dialog tùy chỉnh
+    fun displayNativeDialog(
+        title: String,
+        message: String,
+        telegramLink: String,
+        positiveBtn: String,
+        negativeBtn: String,
+        borderColor: String,
+        bgColor: String,
+        bgAlpha: Float
+    ) {
+        runOnUiThread {
+            val builder = AlertDialog.Builder(this@MainActivity)
+            builder.setCancelable(false)
+            builder.setTitle(title)
+            builder.setMessage(Html.fromHtml(message))
+
+            builder.setPositiveButton(positiveBtn) { dialog, _ -> dialog.dismiss() }
+
+            if (negativeBtn.isNotEmpty() && telegramLink.isNotEmpty()) {
+                builder.setNegativeButton(negativeBtn) { dialog, _ ->
+                    openTelegramGroup(telegramLink)
+                    dialog.dismiss()
+                }
+            }
+
+            val dialog = builder.create()
+            dialog.show()
+
+            val window: Window? = dialog.window
+            if (window != null) {
+                val layoutParams = window.attributes
+                val screenWidth = resources.displayMetrics.widthPixels
+                layoutParams.width = (screenWidth * 0.80).toInt()
+                layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+                layoutParams.gravity = Gravity.CENTER
+                window.attributes = layoutParams
+            }
+
+            val messageText = dialog.findViewById<TextView>(android.R.id.message)
+            if (messageText != null) {
+                messageText.movementMethod = LinkMovementMethod.getInstance()
+                messageText.textSize = 14f
+            }
+
+            styleDialog(dialog, borderColor, bgColor, bgAlpha)
+        }
+    }
+
+    private fun openTelegramGroup(telegramLink: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.data = Uri.parse(telegramLink)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(Intent.createChooser(intent, "Open with"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun styleDialog(dialog: AlertDialog, borderColorHex: String, bgColorHex: String, bgAlpha: Float) {
+        val bg = GradientDrawable()
+        bg.shape = GradientDrawable.RECTANGLE
+        bg.cornerRadius = dpToPx(12).toFloat()
+        bg.setStroke(dpToPx(2), Color.parseColor(borderColorHex))
+        bg.setColor(adjustAlpha(Color.parseColor(bgColorHex), bgAlpha))
+        dialog.window?.setBackgroundDrawable(bg)
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density + 0.5f).toInt()
+    }
+
+    private fun adjustAlpha(color: Int, factor: Float): Int {
+        val alpha = Math.round(Color.alpha(color) * factor)
+        return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+    }
+
+    private fun checkPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                REQUEST_CODE_LOCATION_PERMISSION
+            )
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+                REQUEST_CODE_STORAGE_PERMISSION
+            )
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_WIFI_STATE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_WIFI_STATE),
+                REQUEST_CODE_WIFI_PERMISSION
+            )
+        }
+    }
+
     private fun checkOverlayPermission(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
+            startActivityForResult(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                ),
+                REQUEST_CODE_OVERLAY_PERMISSION
             )
-            startActivityForResult(intent, 123)
             return false
         }
         return true
     }
 
-    private fun startFloatingService() {
-        val intent = Intent(this, FloatingService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-        Toast.makeText(this, "Star Menu Started", Toast.LENGTH_SHORT).show()
-    }
-
-    // Chỉ mở game bằng package kgvn và SGameActivity
-    private fun launchGame() {
-        try {
-            val intent = Intent().apply {
-                setClassName("com.levelinfinite.sgameGlobal.midaspay", "com.levelinfinite.sgameGlobal.SGameGlobalActivity")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            Toast.makeText(this, "Opening Liên Quân...", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Cannot open game: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 123) {
+        if (requestCode == REQUEST_CODE_OVERLAY_PERMISSION) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                startFloatingService()
-                launchGame()
-            } else {
-                Toast.makeText(this, "Izin overlay diperlukan!", Toast.LENGTH_SHORT).show()
+                Initialize(this@MainActivity)
             }
         }
     }
@@ -100,9 +228,9 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(onStartMenu: () -> Unit) {
     val backgroundBrush = Brush.verticalGradient(
         colors = listOf(
-            Color(0xFF0F2027),
-            Color(0xFF203A43),
-            Color(0xFF2C5364)
+            ComposeColor(0xFF0F2027),
+            ComposeColor(0xFF203A43),
+            ComposeColor(0xFF2C5364)
         )
     )
 
@@ -124,7 +252,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                     .padding(16.dp),
                 shape = RoundedCornerShape(32.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xCC1E2A38)
+                    containerColor = ComposeColor(0xCC1E2A38)
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
             ) {
@@ -137,7 +265,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                     Text(
                         text = "★",
                         fontSize = 80.sp,
-                        color = Color(0xFFFFD700),
+                        color = ComposeColor(0xFFFFD700),
                         modifier = Modifier.padding(8.dp)
                     )
 
@@ -147,7 +275,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                         text = "STAR MENU INJECTOR",
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = ComposeColor.White,
                         textAlign = TextAlign.Center,
                         letterSpacing = 1.5.sp
                     )
@@ -157,7 +285,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                     Text(
                         text = "Floating Control Panel",
                         fontSize = 16.sp,
-                        color = Color(0xFFB0BEC5),
+                        color = ComposeColor(0xFFB0BEC5),
                         textAlign = TextAlign.Center
                     )
 
@@ -170,7 +298,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                             .height(56.dp)
                             .clip(RoundedCornerShape(28.dp)),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.Transparent
+                            containerColor = ComposeColor.Transparent
                         ),
                         elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                     ) {
@@ -179,7 +307,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                                 .fillMaxSize()
                                 .background(
                                     brush = Brush.horizontalGradient(
-                                        colors = listOf(Color(0xFFFF8C00), Color(0xFFFFD700))
+                                        colors = listOf(ComposeColor(0xFFFF8C00), ComposeColor(0xFFFFD700))
                                     ),
                                     shape = RoundedCornerShape(28.dp)
                                 ),
@@ -189,7 +317,7 @@ fun MainScreen(onStartMenu: () -> Unit) {
                                 text = "LAUNCH STAR MENU",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.Black,
+                                color = ComposeColor.Black,
                                 letterSpacing = 1.sp
                             )
                         }
@@ -198,9 +326,9 @@ fun MainScreen(onStartMenu: () -> Unit) {
                     Spacer(modifier = Modifier.height(24.dp))
 
                     Text(
-                        text = "Tap to start floating menu & open Liên Quân",
+                        text = "Tap to start floating menu & open game",
                         fontSize = 12.sp,
-                        color = Color(0xFF90A4AE),
+                        color = ComposeColor(0xFF90A4AE),
                         textAlign = TextAlign.Center
                     )
                 }
